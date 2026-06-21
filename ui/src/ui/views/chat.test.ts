@@ -2079,6 +2079,57 @@ describe("chat slash menu accessibility", () => {
     expect(draft).toBe("");
   });
 
+  it("discriminates one-character same-text native replay from genuine typing via beforeinput", () => {
+    const sendOneCharThenReplay = (withBeforeInput: boolean) => {
+      let draft = "";
+      const container = document.createElement("div");
+      const onDraftChange = vi.fn((next: string) => {
+        draft = next;
+      });
+      const onSend = vi.fn(() => {
+        draft = "";
+      });
+      const renderWithDraft = () => {
+        render(
+          renderChat(createChatProps({ draft, getDraft: () => draft, onDraftChange, onSend })),
+          container,
+        );
+      };
+
+      renderWithDraft();
+      // A single-character draft is the case the inputVersion guard alone cannot
+      // tell apart from a same-character native replay after send.
+      inputDraft(container, "a");
+      container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+
+      const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+      expect(textarea?.value).toBe("");
+
+      // Genuine typing fires a user `beforeinput` before the `input`; the native
+      // stale replay re-dispatches only `input`.
+      textarea!.value = "a";
+      if (withBeforeInput) {
+        textarea!.dispatchEvent(
+          new InputEvent("beforeinput", { bubbles: true, data: "a", inputType: "insertText" }),
+        );
+      }
+      textarea!.dispatchEvent(
+        new InputEvent("input", { bubbles: true, data: "a", inputType: "insertText" }),
+      );
+
+      return { draft: () => draft, textarea };
+    };
+
+    // Same-character native replay without a preceding beforeinput stays suppressed.
+    const replay = sendOneCharThenReplay(false);
+    expect(replay.textarea?.value).toBe("");
+    expect(replay.draft()).toBe("");
+
+    // Genuine one-character same-text typing is preserved, not cleared as a replay.
+    const typed = sendOneCharThenReplay(true);
+    expect(typed.textarea?.value).toBe("a");
+  });
+
   it("accepts a later host prefill even when it matches the last submitted draft", () => {
     let draft = "";
     const container = document.createElement("div");

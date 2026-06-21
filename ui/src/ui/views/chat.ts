@@ -572,6 +572,10 @@ type ComposerDraftMirror = {
     text: string;
     inputVersion: number;
   } | null;
+  // Set by a genuine `beforeinput` (real keystroke/paste) and consumed on the
+  // following `input`. Native stale replays re-dispatch `input` without a
+  // preceding user `beforeinput`, so a cleared flag marks the event as a replay.
+  sawDeliberateInput: boolean;
 };
 
 const chatItemsBySession = new Map<string, CachedChatItems>();
@@ -590,12 +594,14 @@ function getComposerDraftMirror(props: ChatProps): ComposerDraftMirror {
       value: props.draft,
       inputVersion: 0,
       pendingClearedSubmittedDraft: null,
+      sawDeliberateInput: false,
     }),
   );
   if (mirror.hostDraft !== props.draft) {
     mirror.hostDraft = props.draft;
     mirror.value = props.draft;
     mirror.pendingClearedSubmittedDraft = null;
+    mirror.sawDeliberateInput = false;
   }
   return mirror;
 }
@@ -628,12 +634,13 @@ function shouldIgnoreClearedSubmittedDraftReplay(
 
 // A stale composer replay re-delivers the just-submitted text through a native
 // `input`/`InputEvent` after send already cleared the host draft (observed on
-// Windows Chrome/Edge). Deliberate same-text re-entry instead arrives as an
-// explicit paste/drop insertion — fresh typing advances `inputVersion`, so it is
-// never confused with a replay. Only those user-initiated insertions are exempt
-// from stale-replay suppression; every other input (including native
-// `InputEvent` replays with `insertText`/`insertReplacementText`/empty
-// `inputType`) stays eligible so the submitted text cannot reappear.
+// Windows Chrome/Edge). The primary discriminator is `beforeinput` intent: a
+// genuine keystroke (even same-text `insertText` of a single character) fires a
+// user `beforeinput` before the `input`, while the native replay re-dispatches
+// only `input`. `sawDeliberateInput` captures that intent and is consumed on the
+// next `input`, so legitimate same-text re-typing is never suppressed. The
+// explicit paste/drop input types below stay as a defensive secondary signal for
+// engines that surface intent only on the `input` event.
 const DELIBERATE_COMPOSER_REENTRY_INPUT_TYPES = new Set([
   "insertFromPaste",
   "insertFromPasteAsQuotation",
@@ -2497,13 +2504,28 @@ export function renderChat(props: ChatProps) {
     }
     updateSlashMenu(target.value, requestUpdate, props, {}, () => target.value);
   };
+  const handleBeforeInput = (e: Event) => {
+    if (vs.composerComposing) {
+      return;
+    }
+    if (typeof InputEvent !== "undefined" && e instanceof InputEvent && e.isComposing) {
+      return;
+    }
+    // A genuine user edit fired; the following `input` is real typing, not a
+    // native stale replay (replays re-dispatch `input` without `beforeinput`).
+    draftMirror.sawDeliberateInput = true;
+  };
   const handleInput = (e: Event) => {
     const target = e.target as HTMLTextAreaElement;
+    // Consume any deliberate-input intent recorded by the preceding `beforeinput`.
+    const sawDeliberateInput = draftMirror.sawDeliberateInput;
+    draftMirror.sawDeliberateInput = false;
     const isCompositionInput =
       vs.composerComposing ||
       (typeof InputEvent !== "undefined" && e instanceof InputEvent && e.isComposing);
     if (
       !isCompositionInput &&
+      !sawDeliberateInput &&
       !isDeliberateComposerReentry(e) &&
       shouldIgnoreClearedSubmittedDraftReplay(props, target.value, draftMirror)
     ) {
@@ -2636,6 +2658,7 @@ export function renderChat(props: ChatProps) {
           aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
           aria-describedby=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
           @keydown=${handleKeyDown}
+          @beforeinput=${handleBeforeInput}
           @input=${handleInput}
           @compositionstart=${() => {
             vs.composerComposing = true;

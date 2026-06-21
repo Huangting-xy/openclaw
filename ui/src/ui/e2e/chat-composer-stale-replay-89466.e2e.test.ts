@@ -19,6 +19,10 @@ const describeE2e = chromiumAvailable ? describe : describe.skip;
 
 const composerSelector = ".agent-chat__composer-combobox textarea";
 const submitted = "submitted message";
+// A single-character draft is the case the inputVersion guard alone cannot tell
+// apart from a same-character native replay after send (multi-character typing
+// advances inputVersion mid-word and masks the defect).
+const singleChar = "a";
 const artifactDir = path.resolve(
   process.cwd(),
   ".artifacts/control-ui-e2e/chat-composer-stale-replay-89466",
@@ -119,6 +123,58 @@ describeE2e("Control UI #89466 composer stale native replay (mocked Gateway E2E)
 
       expect({ afterReentry, afterReplay, afterSend }).toEqual({
         afterReentry: submitted,
+        afterReplay: "",
+        afterSend: "",
+      });
+    } finally {
+      await closeChat(fixture);
+    }
+  });
+
+  it("suppresses a one-character native replay yet accepts genuine one-character re-typing", async () => {
+    const fixture = await openChat();
+    const { page } = fixture;
+    const composer = page.locator(composerSelector);
+    try {
+      await page.getByText("Ready for the stale-replay check.").waitFor({ timeout: 90_000 });
+      await composer.waitFor({ state: "visible", timeout: 90_000 });
+
+      // 1. Send a single-character draft through the real GUI; composer clears.
+      await composer.click();
+      await page.keyboard.type(singleChar);
+      await expect.poll(() => composer.inputValue(), { timeout: 10_000 }).toBe(singleChar);
+      await page.getByRole("button", { name: "Send message" }).click();
+      await expect.poll(() => composer.inputValue(), { timeout: 10_000 }).toBe("");
+      const afterSend = await composer.inputValue();
+
+      // 2. A same-character native InputEvent replay (no preceding user
+      //    `beforeinput`) must stay suppressed even though inputVersion is
+      //    unchanged from the submitted draft.
+      await composer.evaluate((el, text) => {
+        const textarea = el as HTMLTextAreaElement;
+        textarea.value = text;
+        textarea.dispatchEvent(
+          new InputEvent("input", { bubbles: true, data: text, inputType: "insertText" }),
+        );
+      }, singleChar);
+      await page.waitForTimeout(250);
+      const afterReplay = await composer.inputValue();
+      await page.screenshot({
+        path: path.join(artifactDir, "04-one-char-replay-suppressed.png"),
+      });
+
+      // 3. Genuine one-character re-typing fires a real `beforeinput` before the
+      //    `input`, so the same character must be accepted, not cleared.
+      await composer.click();
+      await page.keyboard.type(singleChar);
+      await expect.poll(() => composer.inputValue(), { timeout: 10_000 }).toBe(singleChar);
+      const afterReentry = await composer.inputValue();
+      await page.screenshot({
+        path: path.join(artifactDir, "05-one-char-reentry-accepted.png"),
+      });
+
+      expect({ afterReentry, afterReplay, afterSend }).toEqual({
+        afterReentry: singleChar,
         afterReplay: "",
         afterSend: "",
       });
