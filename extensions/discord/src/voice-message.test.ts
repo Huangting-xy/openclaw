@@ -449,4 +449,53 @@ describe("sendDiscordVoiceMessage", () => {
     expect(tracked.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
   });
+
+  it("bounds voice upload URL success JSON bodies without using response.json()", async () => {
+    const rest = createRest();
+    let cancelCount = 0;
+    const oversizedUploadUrlResponse = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(16 * 1024 * 1024 + 1));
+        },
+        cancel() {
+          cancelCount += 1;
+        },
+      }),
+      { headers: { "content-type": "application/json" }, status: 200 },
+    );
+    const jsonSpy = vi
+      .spyOn(oversizedUploadUrlResponse, "json")
+      .mockRejectedValue(new Error("unbounded"));
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const method = input instanceof Request ? input.method : (init?.method ?? "GET");
+      if (method === "POST" && url.endsWith("/channels/channel-1/attachments")) {
+        return oversizedUploadUrlResponse;
+      }
+      throw new Error(`unexpected fetch ${method} ${url}`);
+    });
+
+    let error: unknown;
+    try {
+      await sendDiscordVoiceMessage(
+        rest,
+        "channel-1",
+        Buffer.from("ogg"),
+        metadata,
+        undefined,
+        async (fn) => await fn(),
+        false,
+        "bot-token",
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(String(error)).toContain(
+      "Discord voice upload URL: JSON response exceeds 16777216 bytes",
+    );
+    expect(cancelCount).toBe(1);
+    expect(jsonSpy).not.toHaveBeenCalled();
+  });
 });
