@@ -2,22 +2,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { fetchPluralKitMessageInfo } from "./pluralkit.js";
 
-type MockResponse = {
-  status: number;
-  ok: boolean;
-  text: () => Promise<string>;
-  json: () => Promise<unknown>;
-};
-
-const buildResponse = (params: { status: number; body?: unknown }): MockResponse => {
+const buildResponse = (params: { status: number; body?: unknown }): Response => {
   const body = params.body;
   const textPayload = typeof body === "string" ? body : body == null ? "" : JSON.stringify(body);
-  return {
+  return new Response(textPayload, {
     status: params.status,
-    ok: params.status >= 200 && params.status < 300,
-    text: async () => textPayload,
-    json: async () => body ?? {},
-  };
+    headers: body == null ? undefined : { "content-type": "application/json" },
+  });
 };
 
 function cancelTrackedResponse(
@@ -112,5 +103,39 @@ describe("fetchPluralKitMessageInfo", () => {
     expect(caught?.message.length).toBeLessThan(8_400);
     expect(tracked.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
+  });
+
+  it("bounds PluralKit API success JSON bodies without using response.json()", async () => {
+    let cancelCount = 0;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(16 * 1024 * 1024 + 1));
+        },
+        cancel() {
+          cancelCount += 1;
+        },
+      }),
+      { headers: { "content-type": "application/json" }, status: 200 },
+    );
+    const jsonSpy = vi.spyOn(response, "json").mockRejectedValue(new Error("unbounded"));
+    const fetcher = vi.fn(async () => response);
+
+    let caught: Error | undefined;
+    try {
+      await fetchPluralKitMessageInfo({
+        messageId: "boom",
+        config: { enabled: true },
+        fetcher: fetcher as unknown as typeof fetch,
+      });
+    } catch (error) {
+      caught = error as Error;
+    }
+
+    expect(caught?.message).toContain(
+      "PluralKit API message: JSON response exceeds 16777216 bytes",
+    );
+    expect(cancelCount).toBe(1);
+    expect(jsonSpy).not.toHaveBeenCalled();
   });
 });
