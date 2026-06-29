@@ -27,6 +27,28 @@ function cancelTrackedResponse(
   };
 }
 
+const DISCORD_API_JSON_CAP_BYTES = 16 * 1024 * 1024;
+
+function oversizedDiscordApiJsonResponse(onCancel: () => void): Response {
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(DISCORD_API_JSON_CAP_BYTES + 1));
+      },
+      cancel() {
+        onCancel();
+      },
+    }),
+    { headers: { "content-type": "application/json" }, status: 200 },
+  );
+  Object.defineProperty(response, "text", {
+    value: async () => {
+      throw new Error("unbounded text reader was used");
+    },
+  });
+  return response;
+}
+
 describe("fetchDiscord", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -93,6 +115,28 @@ describe("fetchDiscord", () => {
     expect(String(error)).not.toContain("tail");
     expect(tracked.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
+  });
+
+  it("bounds Discord API success bodies without using response.text()", async () => {
+    let cancelCount = 0;
+    const fetcher = withFetchPreconnect(async () =>
+      oversizedDiscordApiJsonResponse(() => {
+        cancelCount += 1;
+      }),
+    );
+
+    let error: unknown;
+    try {
+      await fetchDiscord("/users/@me/guilds", "test", fetcher, {
+        retry: { attempts: 1 },
+      });
+    } catch (err) {
+      error = err;
+    }
+
+    expect(String(error)).toContain("Discord API /users/@me/guilds");
+    expect(String(error)).toContain("exceeds 16777216 bytes");
+    expect(cancelCount).toBe(1);
   });
 
   it("sanitizes Cloudflare HTML rate limits and applies a fallback cooldown", async () => {

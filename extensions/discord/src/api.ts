@@ -2,6 +2,7 @@
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   resolveRetryConfig,
   retryAsync,
@@ -19,6 +20,9 @@ const DISCORD_API_RETRY_DEFAULTS = {
 };
 const DISCORD_API_429_FALLBACK_RETRY_AFTER_SECONDS = 60;
 const DISCORD_API_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+// Discord REST success payloads are JSON and normally small; cap reads the same way
+// provider HTTP does so a hostile upstream cannot stream an unbounded body before parse.
+const DISCORD_API_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
 type DiscordApiErrorPayload = {
   message?: string;
@@ -153,6 +157,22 @@ function resolveDiscordRequestSignal(options: DiscordApiRequestOptions) {
   return AbortSignal.timeout(resolveTimerTimeoutMs(options.timeoutMs, 1));
 }
 
+async function readDiscordApiSuccessJson<T>(res: Response, path: string): Promise<T> {
+  const bytes = await readResponseWithLimit(res, DISCORD_API_JSON_RESPONSE_MAX_BYTES, {
+    onOverflow: ({ maxBytes }) =>
+      new Error(`Discord API ${path}: response exceeds ${maxBytes} bytes`),
+  });
+  const text = new TextDecoder().decode(bytes);
+  if (!text.trim()) {
+    return undefined as T;
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(`Discord API ${path}: malformed JSON response`);
+  }
+}
+
 export async function requestDiscord<T>(
   path: string,
   token: string,
@@ -191,11 +211,7 @@ export async function requestDiscord<T>(
           retryAfter,
         );
       }
-      const text = await res.text().catch(() => "");
-      if (!text.trim()) {
-        return undefined as T;
-      }
-      return JSON.parse(text) as T;
+      return await readDiscordApiSuccessJson<T>(res, path);
     },
     {
       ...retryConfig,
