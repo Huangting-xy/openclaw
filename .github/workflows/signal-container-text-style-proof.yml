@@ -1,0 +1,78 @@
+# Isolated fork-only workflow: real bbernhard/signal-cli-rest-api proof for #107620.
+# Not intended for the upstream PR branch.
+name: Signal container text-style proof
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout proof branch head
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.0"
+
+      - name: Enable corepack / pnpm
+        run: |
+          corepack enable
+          corepack prepare "$(node -p "require('./package.json').packageManager")" --activate
+          pnpm --version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Start signal-cli-rest-api container
+        run: |
+          docker pull bbernhard/signal-cli-rest-api:latest
+          docker run -d --name signal-api \
+            -p 8080:8080 \
+            -e MODE=native \
+            bbernhard/signal-cli-rest-api:latest
+          echo "Waiting for /v1/about..."
+          for i in $(seq 1 90); do
+            if curl -fsS "http://127.0.0.1:8080/v1/about" >/tmp/signal-about.json; then
+              echo "container ready after ${i}s"
+              cat /tmp/signal-about.json
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "container failed to become ready"
+          docker logs signal-api || true
+          exit 1
+
+      - name: Run production-path proof against real container
+        env:
+          SIGNAL_CONTAINER_URL: http://127.0.0.1:8080
+        run: |
+          set -o pipefail
+          node --import tsx scripts/proof-signal-text-style-real-container.mts | tee proof-signal-text-style-real-container.txt
+
+      - name: Capture container identity
+        if: always()
+        run: |
+          {
+            echo "=== docker image ==="
+            docker inspect --format '{{.Config.Image}} {{.Id}}' signal-api || true
+            echo "=== /v1/about ==="
+            curl -fsS http://127.0.0.1:8080/v1/about || true
+            echo
+            echo "=== docker logs (tail) ==="
+            docker logs --tail 80 signal-api || true
+          } | tee proof-signal-container-meta.txt
+
+      - name: Upload proof transcript
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-text-style-real-container-proof
+          path: |
+            proof-signal-text-style-real-container.txt
+            proof-signal-container-meta.txt
+          if-no-files-found: warn
