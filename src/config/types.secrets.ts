@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Defines secret reference and resolution configuration types.
 import { isRecord } from "../utils.js";
 
@@ -97,7 +98,7 @@ export function parseEnvTemplateSecretRef(
   return {
     source: "env",
     provider: provider.trim() || DEFAULT_SECRET_PROVIDER_ALIAS,
-    id: match[1],
+    id: expectDefined(match[1], "types.secrets regex capture 1"),
   };
 }
 
@@ -179,10 +180,28 @@ function formatSecretRefLabel(ref: SecretRef): string {
   return `${ref.source}:${ref.provider}:${ref.id}`;
 }
 
+/** Error thrown when strict secret reads encounter a configured but unresolved SecretRef. */
+export class UnresolvedSecretInputError extends Error {
+  readonly path: string;
+  readonly ref: SecretRef;
+
+  constructor(params: { path: string; ref: SecretRef }) {
+    super(
+      `${params.path}: unresolved SecretRef "${formatSecretRefLabel(params.ref)}". Resolve this command against an active gateway runtime snapshot before reading it.`,
+    );
+    this.name = "UnresolvedSecretInputError";
+    this.path = params.path;
+    this.ref = params.ref;
+  }
+}
+
+/** Narrow errors from strict secret read sites without parsing user-facing messages. */
+export function isUnresolvedSecretInputError(value: unknown): value is UnresolvedSecretInputError {
+  return value instanceof UnresolvedSecretInputError;
+}
+
 function createUnresolvedSecretInputError(params: { path: string; ref: SecretRef }): Error {
-  return new Error(
-    `${params.path}: unresolved SecretRef "${formatSecretRefLabel(params.ref)}". Resolve this command against an active gateway runtime snapshot before reading it.`,
-  );
+  return new UnresolvedSecretInputError(params);
 }
 
 /** Throw when a secret field still contains an unresolved SecretRef at a read site. */
@@ -292,7 +311,6 @@ export type FileSecretProviderConfig = {
   mode?: FileSecretProviderMode;
   timeoutMs?: number;
   maxBytes?: number;
-  allowInsecurePath?: boolean;
 };
 
 export type ManualExecSecretProviderConfig = {
@@ -306,8 +324,6 @@ export type ManualExecSecretProviderConfig = {
   env?: Record<string, string>;
   passEnv?: string[];
   trustedDirs?: string[];
-  allowInsecurePath?: boolean;
-  allowSymlinkCommand?: boolean;
 };
 
 export type PluginIntegrationSecretProviderConfig = {
@@ -333,10 +349,5 @@ export type SecretsConfig = {
     env?: string;
     file?: string;
     exec?: string;
-  };
-  resolution?: {
-    maxProviderConcurrency?: number;
-    maxRefsPerProvider?: number;
-    maxBatchBytes?: number;
   };
 };

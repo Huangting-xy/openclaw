@@ -36,10 +36,12 @@ export type FeishuMessageContext = {
   chatId: string;
   messageId: string;
   replyTargetMessageId?: string;
+  typingTargetMessageId?: string;
   suppressReplyTarget?: boolean;
   senderId: string;
   senderOpenId: string;
   senderName?: string;
+  senderType: "user" | "bot";
   chatType: FeishuChatType;
   mentionedBot: boolean;
   hasAnyMention?: boolean;
@@ -85,9 +87,9 @@ export interface FeishuProbeResult extends BaseProbeResult {
 }
 
 export type FeishuMediaInfo = {
-  path: string;
+  path?: string;
   contentType?: string;
-  placeholder: string;
+  kind: Exclude<import("openclaw/plugin-sdk/media-runtime").MediaKind, "unknown">;
 };
 
 export type FeishuToolsConfig = {
@@ -99,8 +101,6 @@ export type FeishuToolsConfig = {
   scopes?: boolean;
   /** Bitable/Base operations (default: true). */
   bitable?: boolean;
-  /** @deprecated Use bitable. */
-  base?: boolean;
 };
 
 export type DynamicAgentCreationConfig = {

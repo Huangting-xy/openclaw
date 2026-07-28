@@ -7,22 +7,26 @@ type ChannelHealthSnapshot = {
   connected?: boolean;
   enabled?: boolean;
   configured?: boolean;
+  linked?: boolean;
   restartPending?: boolean;
   busy?: boolean;
   activeRuns?: number;
   lastRunActivityAt?: number | null;
+  activeRunStartedAt?: number | null;
   lastEventAt?: number | null;
   lastConnectedAt?: number | null;
   lastTransportActivityAt?: number | null;
   lastStartAt?: number | null;
   reconnectAttempts?: number;
   mode?: string;
+  terminalDisconnect?: boolean;
 };
 
 type ChannelHealthEvaluationReason =
   | "healthy"
   | "unmanaged"
   | "not-running"
+  | "terminal-disconnect"
   | "busy"
   | "stuck"
   | "startup-connect-grace"
@@ -44,7 +48,7 @@ export type ChannelHealthPolicy = {
 type ChannelRestartReason = "gave-up" | "stopped" | "stale-socket" | "stuck" | "disconnected";
 
 function isManagedAccount(snapshot: ChannelHealthSnapshot): boolean {
-  return snapshot.enabled !== false && snapshot.configured !== false;
+  return snapshot.enabled !== false && snapshot.configured !== false && snapshot.linked !== false;
 }
 
 const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;
@@ -59,6 +63,9 @@ export function evaluateChannelHealth(
 ): ChannelHealthEvaluation {
   if (!isManagedAccount(snapshot)) {
     return { healthy: true, reason: "unmanaged" };
+  }
+  if (!snapshot.running && snapshot.terminalDisconnect) {
+    return { healthy: false, reason: "terminal-disconnect" };
   }
   if (!snapshot.running) {
     return { healthy: false, reason: "not-running" };
@@ -75,6 +82,10 @@ export function evaluateChannelHealth(
   const lastRunActivityAt =
     typeof snapshot.lastRunActivityAt === "number" && Number.isFinite(snapshot.lastRunActivityAt)
       ? snapshot.lastRunActivityAt
+      : null;
+  const activeRunStartedAt =
+    typeof snapshot.activeRunStartedAt === "number" && Number.isFinite(snapshot.activeRunStartedAt)
+      ? snapshot.activeRunStartedAt
       : null;
   const lastTransportActivityAt =
     typeof snapshot.lastTransportActivityAt === "number" &&
@@ -95,7 +106,12 @@ export function evaluateChannelHealth(
         lastRunActivityAt == null
           ? Number.POSITIVE_INFINITY
           : Math.max(0, policy.now - lastRunActivityAt);
-      if (runActivityAge < BUSY_ACTIVITY_STALE_THRESHOLD_MS) {
+      const disconnectedRunStartAge =
+        snapshot.connected === false && activeRunStartedAt != null
+          ? Math.max(0, policy.now - activeRunStartedAt)
+          : 0;
+      const busyAge = Math.max(runActivityAge, disconnectedRunStartAge);
+      if (busyAge < BUSY_ACTIVITY_STALE_THRESHOLD_MS) {
         return { healthy: true, reason: "busy" };
       }
       return { healthy: false, reason: "stuck" };

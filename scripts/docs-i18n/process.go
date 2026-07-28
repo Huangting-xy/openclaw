@@ -12,6 +12,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	localizedLinkPostprocessPending = "pending"
+	localizedLinkPostprocessVersion = "locale-links-v1"
+)
+
 func processFile(ctx context.Context, translator docsTranslator, tm *TranslationMemory, docsRoot, filePath, srcLang, tgtLang string) (bool, string, error) {
 	absPath, relPath, err := resolveDocsPath(docsRoot, filePath)
 	if err != nil {
@@ -109,9 +114,7 @@ func splitFrontMatter(content string) (string, string) {
 	}
 	front := strings.Join(lines[1:endIndex], "\n")
 	body := strings.Join(lines[endIndex+1:], "\n")
-	if strings.HasPrefix(body, "\n") {
-		body = body[1:]
-	}
+	body = strings.TrimPrefix(body, "\n")
 	return front, body
 }
 
@@ -120,12 +123,14 @@ func encodeFrontMatter(frontData map[string]any, relPath string, source []byte) 
 		frontData = map[string]any{}
 	}
 	frontData["x-i18n"] = map[string]any{
-		"source_path":  relPath,
-		"source_hash":  hashBytes(source),
-		"provider":     docsI18nProvider(),
-		"model":        docsI18nModel(),
-		"workflow":     workflowVersion,
-		"generated_at": time.Now().UTC().Format(time.RFC3339),
+		"source_path":         relPath,
+		"source_hash":         hashBytes(source),
+		"provider":            docsI18nProvider(),
+		"model":               docsI18nModel(),
+		"workflow":            workflowVersion,
+		"prompt_version":      promptVersion,
+		"generated_at":        time.Now().UTC().Format(time.RFC3339),
+		"postprocess_version": localizedLinkPostprocessPending,
 	}
 	encoded, err := yaml.Marshal(frontData)
 	if err != nil {

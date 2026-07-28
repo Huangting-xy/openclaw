@@ -10,6 +10,7 @@ import {
   ensureSandboxWorkspaceForSession,
   resolveSandboxRuntimeStatus,
 } from "../../agents/sandbox.js";
+import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
@@ -69,7 +70,7 @@ vi.mock("../../agents/agent-tools.js", () => ({
   createOpenClawCodingTools: createOpenClawCodingToolsMock,
 }));
 
-vi.mock("../../tts/tts.js", () => ({
+vi.mock("../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
 }));
 
@@ -229,6 +230,16 @@ describe("resolveCommandsSystemPromptBundle", () => {
       "resolveBootstrapContextForRun",
     );
     expect(bootstrapParams.sessionId).toBe("target-session");
+    const runtimeParams = requireFirstArg(
+      vi.mocked(buildSystemPromptParams),
+      "buildSystemPromptParams",
+    );
+    expect(runtimeParams.runtime).toEqual(
+      expect.objectContaining({
+        sessionKey: "agent:target:telegram:direct:target-session",
+        sessionId: "target-session",
+      }),
+    );
     const toolParams = requireFirstArg(
       vi.mocked(createOpenClawCodingTools),
       "createOpenClawCodingTools",

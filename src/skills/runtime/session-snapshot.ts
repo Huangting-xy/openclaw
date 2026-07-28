@@ -5,6 +5,7 @@ import { redactConfigObject } from "../../config/redact-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { matchesSkillFilter } from "../discovery/filter.js";
 import { buildWorkspaceSkillSnapshot } from "../loading/workspace.js";
+import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import type { SkillEligibilityContext, SkillSnapshot } from "../types.js";
 import { getSkillsSnapshotVersion, shouldRefreshSnapshotForVersion } from "./refresh-state.js";
 import { ensureSkillsWatcher } from "./refresh.js";
@@ -14,7 +15,7 @@ const resolvedSkillsCache = new Map<string, SkillSnapshot["resolvedSkills"]>();
 const RESOLVED_SKILLS_CACHE_MAX = 10;
 
 /** Inputs that make a resolved skill snapshot reusable within a process. */
-export type ReusableSkillSnapshotParams = {
+type ReusableSkillSnapshotParams = {
   workspaceDir: string;
   config: OpenClawConfig;
   agentId?: string;
@@ -26,15 +27,11 @@ export type ReusableSkillSnapshotParams = {
   hydrateExisting?: boolean;
 };
 
-export type ReusableSkillSnapshotResult = {
+type ReusableSkillSnapshotResult = {
   snapshot: SkillSnapshot;
   shouldRefresh: boolean;
   snapshotVersion: number;
 };
-
-export function resetResolvedSkillsCacheForTests(): void {
-  resolvedSkillsCache.clear();
-}
 
 function fingerprintSkillSnapshotConfig(config: OpenClawConfig): string {
   return crypto
@@ -61,8 +58,19 @@ export function resolveReusableWorkspaceSkillSnapshot(
     ensureSkillsWatcher({ workspaceDir: params.workspaceDir, config: params.config });
   }
   const snapshotVersion = params.snapshotVersion ?? getSkillsSnapshotVersion(params.workspaceDir);
+  const promptFormatChanged =
+    params.existingSnapshot?.promptFormatVersion !== WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION;
+  const skillVersionChanged = shouldRefreshSnapshotForVersion(
+    params.existingSnapshot?.version,
+    snapshotVersion,
+  );
+  const nodeSkillsEligibilityChanged =
+    stableStringify(params.existingSnapshot?.nodeSkillsEligibility) !==
+    stableStringify(params.eligibility?.nodeSkills);
   const shouldRefresh =
-    shouldRefreshSnapshotForVersion(params.existingSnapshot?.version, snapshotVersion) ||
+    promptFormatChanged ||
+    skillVersionChanged ||
+    nodeSkillsEligibilityChanged ||
     !matchesSkillFilter(params.existingSnapshot?.skillFilter, params.skillFilter);
   const buildSnapshot = () => {
     return buildWorkspaceSkillSnapshot(params.workspaceDir, {
@@ -74,17 +82,17 @@ export function resolveReusableWorkspaceSkillSnapshot(
     });
   };
 
-  const configFingerprint = fingerprintSkillSnapshotConfig(params.config);
-  const snapshotCacheKey = JSON.stringify([
-    params.workspaceDir,
-    snapshotVersion,
-    params.skillFilter,
-    params.agentId,
-    params.eligibility,
-    configFingerprint,
-  ]);
+  const buildSnapshotCacheKey = () =>
+    JSON.stringify([
+      params.workspaceDir,
+      snapshotVersion,
+      params.skillFilter,
+      params.agentId,
+      params.eligibility,
+      fingerprintSkillSnapshotConfig(params.config),
+    ]);
 
-  const cachedRebuild = (): SkillSnapshot => {
+  const cachedRebuild = (snapshotCacheKey = buildSnapshotCacheKey()): SkillSnapshot => {
     if (resolvedSkillsCache.has(snapshotCacheKey)) {
       return { resolvedSkills: resolvedSkillsCache.get(snapshotCacheKey) } as SkillSnapshot;
     }
@@ -93,7 +101,7 @@ export function resolveReusableWorkspaceSkillSnapshot(
 
   const snapshot =
     !params.existingSnapshot || shouldRefresh
-      ? cacheResolvedSkills(snapshotCacheKey, buildSnapshot())
+      ? cacheResolvedSkills(buildSnapshotCacheKey(), buildSnapshot())
       : params.hydrateExisting === false
         ? params.existingSnapshot
         : hydrateResolvedSkills(params.existingSnapshot, cachedRebuild);
