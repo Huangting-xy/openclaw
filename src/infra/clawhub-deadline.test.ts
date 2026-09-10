@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { downloadClawHubPackageArchive } from "./clawhub-artifacts.js";
 import type { ClawHubFetch } from "./clawhub-client.js";
 import { reportClawHubPluginInstallTelemetry, searchClawHubPackages } from "./clawhub-packages.js";
 import { reportClawHubSkillInstallTelemetry } from "./clawhub-skills.js";
 
 function createResponseSource(params: { status: number; headersAfterMs?: number }) {
-  const connected = Promise.withResolvers<{
+  const connected = createDeferred<{
     write: (bytes: Uint8Array) => void;
     close: () => void;
   }>();
